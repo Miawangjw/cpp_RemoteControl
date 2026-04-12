@@ -16,3 +16,4 @@
 1. 运行 server
 2. 运行 client
 3. 输入服务器IP连接
+4. 可能需要服务端执行`netsh advfirewall firewall add rule name="Open Port 8765" dir=in action=allow protocol=TCP localport=8765`
