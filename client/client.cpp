@@ -141,8 +141,11 @@ int WINAPI WinMain(
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(8765);
-	addr.sin_addr.S_un.S_addr = inet_addr("192.168.1.111");
-	
+	std::string server_ip;
+	std::cout << "请输入server的ip:";
+	std::cin >> server_ip;
+	addr.sin_addr.S_un.S_addr = inet_addr(server_ip.c_str());
+
 	if (connect(g_sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
 		std::cout << "connected to server failed\n";
 		return 0;
