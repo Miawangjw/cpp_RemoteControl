@@ -18,6 +18,7 @@ int g_remote_height = -1;
 CRITICAL_SECTION g_cri_sec;
 SOCKET g_sock;
 static ULONGLONG g_mouse_tick = GetTickCount64();
+uint8_t tmp[1024 * 1024];
 //客户端默认只有一条流水线用来处理UI
 //如果使用recv，是阻塞的，会卡死
 //需要重新开一条流水线
@@ -145,7 +146,6 @@ int WINAPI WinMain(
 	std::cout << "请输入server的ip:";
 	std::cin >> server_ip;
 	addr.sin_addr.S_un.S_addr = inet_addr(server_ip.c_str());
-
 	if (connect(g_sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
 		std::cout << "connected to server failed\n";
 		return 0;
@@ -170,48 +170,67 @@ int WINAPI WinMain(
 
 //返回值 调用约定 函数名(参数列表){函数体}
 DWORD WINAPI SendScreenCallBack(LPVOID lpThreadParam) {
-	std::vector<uint8_t> recv_buffer(RECV_BUFFER_LEN);
 	//不停发送和解析数据
 	TCP_Client client;
 	client.init_handlers();
-	
-	size_t data_len = 0;
+	std::vector<uint8_t> recv_buffer;
+	std::vector<uint8_t> parse_buffer;
+	recv_buffer.reserve(RECV_BUFFER_LEN);
+	parse_buffer.reserve(RECV_BUFFER_LEN);
 	while (true) {
-		Sleep(25);
+		Sleep(50); 
 		auto packet = pack_packet(static_cast<int>(CMD_TYPE::CMD_SCREEN), {});
 		int send_len = send(g_sock,
-			reinterpret_cast<const char*>(packet.data()), 
-			packet.size(), 
+			reinterpret_cast<const char*>(packet.data()),
+			packet.size(),
 			0);
 
-		int len = recv(g_sock,
-			(char*)recv_buffer.data() + data_len,
-			recv_buffer.size() - data_len,
-			0);
-		if (len <= 100) {
-			continue;
+		int len = recv(g_sock, (char*)tmp, sizeof(tmp), 0);
+		if (len <= 0) {
+			if (len == 0) {
+				std::cout << "server closed\n";
+			}
+			else {
+				std::cout << "recv error: " << WSAGetLastError() << "\n";
+			}
+			break;
 		}
-		data_len += len;
-		// ⭐ 用offset解析（无拷贝）
+		std::cout << "len: " << len << "\n";
+
+		recv_buffer.insert(recv_buffer.end(), tmp, tmp + len);
+
+		// swap（O(1)）
+		recv_buffer.swap(parse_buffer);
+		recv_buffer.clear();
+
 		size_t offset = 0;
 
+		std::optional<Packet> last_pkt;
+
 		while (true) {
-			auto pkt_opt = try_parse_packet(recv_buffer, offset, data_len);
-			if (!pkt_opt) {
-				break;
-			}
-			client.handle_packet(*pkt_opt, g_sock);
+			auto pkt = try_parse_packet(parse_buffer, offset, parse_buffer.size());
+			if (!pkt) break;
+
+			last_pkt = std::move(pkt); // 覆盖旧帧
 		}
-
-		// ⭐ 移动剩余数据（关键）
-		if (offset > 0) {
-			memmove(recv_buffer.data(),
-				recv_buffer.data() + offset,
-				data_len - offset);
-
-			data_len -= offset;
+		// 只处理最后一帧
+		if (last_pkt) {
+			client.handle_packet(*last_pkt, g_sock);
+		}
+		//  把没解析完的数据放回 recv_buffer
+		if (offset < parse_buffer.size()) {
+			recv_buffer.insert(
+				recv_buffer.end(),
+				parse_buffer.begin() + offset,
+				parse_buffer.end()
+			);
+		}
+		// 防止异常爆内存
+		if (recv_buffer.size() > RECV_BUFFER_LEN) {
+			recv_buffer.clear();
 		}
 	}
+	return 0;
 }
 
 int InitWindow(HINSTANCE hInstance, int nCmdShow) {
